@@ -1,1 +1,0 @@
-sudo -u postgres pg_dumpall > /vagrant/cluster_backup

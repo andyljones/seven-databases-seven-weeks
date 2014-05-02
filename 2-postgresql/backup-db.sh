@@ -1,0 +1,1 @@
+sudo -u postgres pg_dumpall > /vagrant/backup.sql
