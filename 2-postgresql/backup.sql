@@ -134,6 +134,64 @@ COMMENT ON EXTENSION tablefunc IS 'functions that manipulate whole tables, inclu
 
 SET search_path = public, pg_catalog;
 
+--
+-- Name: add_event(text, timestamp without time zone, timestamp without time zone, text, character varying, character); Type: FUNCTION; Schema: public; Owner: vagrant
+--
+
+CREATE FUNCTION add_event(title text, starts timestamp without time zone, ends timestamp without time zone, venue text, postal character varying, country character) RETURNS boolean
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+	did_insert boolean := false;
+	found_count integer;
+	the_venue_id integer;
+BEGIN
+	SELECT venue_id INTO the_venue_id
+	FROM venues v
+	WHERE v.postal_code = postal
+		AND v.country_code = country
+		AND v.name ILIKE venue
+	LIMIT 1;
+
+	IF the_venue_id IS NULL THEN
+		INSERT INTO venues(name, postal_code, country_code)
+		VALUES (venue, postal, country)
+		RETURNING venue_id INTO the_venue_id;
+
+		did_insert := true;
+	END IF;
+
+	RAISE NOTICE 'Venue found %', the_venue_id;
+
+ 	INSERT INTO events (title, starts, ends, venue_id)
+	VALUES (title, starts, ends, the_venue_id);
+
+	RETURN did_insert;
+END;
+$$;
+
+
+ALTER FUNCTION public.add_event(title text, starts timestamp without time zone, ends timestamp without time zone, venue text, postal character varying, country character) OWNER TO vagrant;
+
+--
+-- Name: log_event(); Type: FUNCTION; Schema: public; Owner: vagrant
+--
+
+CREATE FUNCTION log_event() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+BEGIN
+	INSERT INTO logs(event_id, old_title, old_starts, old_ends)
+	VALUES (OLD.event_id, OLD.title, OLD.starts, OLD.ends);
+	RAISE NOTICE 'Event #% was changed', OLD.event_id;
+	RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION public.log_event() OWNER TO vagrant;
+
 SET default_tablespace = '';
 
 SET default_with_oids = false;
@@ -173,7 +231,8 @@ CREATE TABLE events (
     title text,
     starts timestamp without time zone,
     ends timestamp without time zone,
-    venue_id integer
+    venue_id integer,
+    colors text[]
 );
 
 
@@ -199,6 +258,31 @@ ALTER TABLE public.events_event_id_seq OWNER TO vagrant;
 
 ALTER SEQUENCE events_event_id_seq OWNED BY events.event_id;
 
+
+--
+-- Name: holidays; Type: VIEW; Schema: public; Owner: vagrant
+--
+
+CREATE VIEW holidays AS
+    SELECT events.event_id AS holiday_id, events.title AS name, events.starts AS date, events.colors FROM events WHERE ((events.title ~~ '%Day%'::text) AND (events.venue_id IS NULL));
+
+
+ALTER TABLE public.holidays OWNER TO vagrant;
+
+--
+-- Name: logs; Type: TABLE; Schema: public; Owner: vagrant; Tablespace: 
+--
+
+CREATE TABLE logs (
+    event_id integer,
+    old_title character varying(255),
+    old_starts timestamp without time zone,
+    old_ends timestamp without time zone,
+    logged_at timestamp without time zone DEFAULT now()
+);
+
+
+ALTER TABLE public.logs OWNER TO vagrant;
 
 --
 -- Name: venues; Type: TABLE; Schema: public; Owner: vagrant; Tablespace: 
@@ -278,10 +362,15 @@ de	Germany
 -- Data for Name: events; Type: TABLE DATA; Schema: public; Owner: vagrant
 --
 
-COPY events (event_id, title, starts, ends, venue_id) FROM stdin;
-1	LARP Club	2012-02-15 17:30:00	2012-02-15 19:30:00	2
-3	Christmas Day	2012-12-25 00:00:00	2012-12-25 23:59:00	\N
-2	April Fools Day	2012-04-01 00:00:00	2012-04-01 23:59:00	\N
+COPY events (event_id, title, starts, ends, venue_id, colors) FROM stdin;
+1	LARP Club	2012-02-15 17:30:00	2012-02-15 19:30:00	2	\N
+2	April Fools Day	2012-04-01 00:00:00	2012-04-01 23:59:00	\N	\N
+4	Moby	2012-02-06 21:00:00	2012-02-06 23:00:00	1	\N
+5	Wedding	2012-02-26 21:00:00	2012-02-26 23:00:00	2	\N
+7	Valentine's Day	2012-02-14 00:00:00	2012-02-14 23:59:00	\N	\N
+6	Dinner with Mom	2012-02-26 18:00:00	2012-02-26 20:30:00	5	\N
+8	House Party	2012-05-03 23:00:00	2012-05-04 01:00:00	6	\N
+3	Christmas Day	2012-12-25 00:00:00	2012-12-25 23:59:00	\N	{red,green}
 \.
 
 
@@ -289,7 +378,17 @@ COPY events (event_id, title, starts, ends, venue_id) FROM stdin;
 -- Name: events_event_id_seq; Type: SEQUENCE SET; Schema: public; Owner: vagrant
 --
 
-SELECT pg_catalog.setval('events_event_id_seq', 3, true);
+SELECT pg_catalog.setval('events_event_id_seq', 8, true);
+
+
+--
+-- Data for Name: logs; Type: TABLE DATA; Schema: public; Owner: vagrant
+--
+
+COPY logs (event_id, old_title, old_starts, old_ends, logged_at) FROM stdin;
+8	House Party	2012-05-03 23:00:00	2012-05-04 02:00:00	2014-05-03 10:40:30.650055
+3	Christmas Day	2012-12-25 00:00:00	2012-12-25 23:59:00	2014-05-03 11:05:45.448769
+\.
 
 
 --
@@ -299,6 +398,8 @@ SELECT pg_catalog.setval('events_event_id_seq', 3, true);
 COPY venues (venue_id, name, street_address, type, postal_code, country_code) FROM stdin;
 1	Crystal Ballroom	\N	public 	97205	us
 2	Voodoo Donuts	\N	public 	97205	us
+5	My Place	1 ab daft place	public 	\N	\N
+6	Run's House	\N	public 	97205	us
 \.
 
 
@@ -306,7 +407,7 @@ COPY venues (venue_id, name, street_address, type, postal_code, country_code) FR
 -- Name: venues_venue_id_seq; Type: SEQUENCE SET; Schema: public; Owner: vagrant
 --
 
-SELECT pg_catalog.setval('venues_venue_id_seq', 2, true);
+SELECT pg_catalog.setval('venues_venue_id_seq', 6, true);
 
 
 --
@@ -347,6 +448,20 @@ ALTER TABLE ONLY events
 
 ALTER TABLE ONLY venues
     ADD CONSTRAINT venues_pkey PRIMARY KEY (venue_id);
+
+
+--
+-- Name: update_holidays; Type: RULE; Schema: public; Owner: vagrant
+--
+
+CREATE RULE update_holidays AS ON UPDATE TO holidays DO INSTEAD UPDATE events SET title = new.name, starts = new.date, colors = new.colors WHERE (events.title = old.name);
+
+
+--
+-- Name: log_events; Type: TRIGGER; Schema: public; Owner: vagrant
+--
+
+CREATE TRIGGER log_events AFTER UPDATE ON events FOR EACH ROW EXECUTE PROCEDURE log_event();
 
 
 --
